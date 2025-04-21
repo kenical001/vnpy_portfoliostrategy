@@ -12,7 +12,8 @@ class PortfolioBarGenerator:
         on_bars: Callable,
         window: int = 0,
         on_window_bars: Callable = None,
-        interval: Interval = Interval.MINUTE
+        interval: Interval = Interval.MINUTE,
+        daily_end: time = None
     ) -> None:
         """构造函数"""
         self.on_bars: Callable = on_bars
@@ -26,11 +27,17 @@ class PortfolioBarGenerator:
         self.hour_bars: dict[str, BarData] = {}
         self.finished_hour_bars: dict[str, BarData] = {}
 
+        self.daily_bars: dict[str, BarData] = {}
+
         self.window: int = window
         self.window_bars: dict[str, BarData] = {}
         self.on_window_bars: Callable = on_window_bars
 
         self.last_dt: datetime = None
+
+        self.daily_end: time = daily_end
+        if self.interval == Interval.DAILY and not self.daily_end:
+            raise RuntimeError(_("合成日K线必须传入每日收盘时间"))
 
     def update_tick(self, tick: TickData) -> None:
         """更新行情切片数据"""
@@ -78,8 +85,11 @@ class PortfolioBarGenerator:
         """更新一分钟K线"""
         if self.interval == Interval.MINUTE:
             self.update_bar_minute_window(bars)
-        else:
+        elif self.interval == Interval.HOUR:
             self.update_bar_hour_window(bars)
+        else:
+            self.update_bar_daily_window(bars)
+            
 
     def update_bar_minute_window(self, bars: dict[str, BarData]) -> None:
         """更新N分钟K线"""
@@ -244,3 +254,50 @@ class PortfolioBarGenerator:
                 self.interval_count = 0
                 self.on_window_bars(self.window_bars)
                 self.window_bars = {}
+
+    def update_bar_daily_window(self, bars: dict[str, BarData]) -> None:
+        """更新日K线"""
+        for vt_symbol, bar in bars.items():
+            daily_bar: Optional[BarData] = self.daily_bars.get(vt_symbol, None)
+
+            # 如果没有日K线则创建
+            if not daily_bar:
+                dt: datetime = bar.datetime.replace(hour=0, minute=0, second=0, microsecond=0)
+                daily_bar = BarData(
+                    symbol=bar.symbol,
+                    exchange=bar.exchange,
+                    datetime=dt,
+                    gateway_name=bar.gateway_name,
+                    open_price=bar.open_price,
+                    high_price=bar.high_price,
+                    low_price=bar.low_price,
+                    close_price=bar.close_price,
+                    volume=bar.volume,
+                    turnover=bar.turnover,
+                    open_interest=bar.open_interest
+                )
+                
+                self.daily_bars[vt_symbol] = daily_bar
+
+            else:
+                # Otherwise, update high/low price into daily bar
+                daily_bar.high_price = max(
+                    daily_bar.high_price,
+                    bar.high_price
+                )
+                daily_bar.low_price = min(
+                    daily_bar.low_price,
+                    bar.low_price
+                )
+
+                # Update close price/volume/turnover into daily bar
+                daily_bar.close_price = bar.close_price
+                daily_bar.volume += bar.volume
+                daily_bar.turnover += bar.turnover
+                daily_bar.open_interest = bar.open_interest
+        
+        # Check if daily bar completed
+        if self.daily_bars and bar.datetime.time() == self.daily_end:
+            self.on_window_bars(self.daily_bars)
+
+            self.daily_bars = {}
