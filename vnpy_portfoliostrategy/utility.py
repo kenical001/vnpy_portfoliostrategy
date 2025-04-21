@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime,time
 from typing import Callable, Optional
 
 from vnpy.trader.object import BarData, TickData, Interval
